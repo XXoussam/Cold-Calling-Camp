@@ -1,0 +1,18 @@
+# Secrets — never commit these
+.env
+.env.*
+archive/
+
+# Leads / call data — real business & personal data (phone numbers, emails, transcripts)
+leads/
+KMS/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Virtual environments
+.venv/
+.venv-win/
+.venv-audit/
