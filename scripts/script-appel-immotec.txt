@@ -1,0 +1,118 @@
+SCRIPT D'APPEL - IMMOTEC (Julien Bensimon, Directeur)
+========================================================
+
+[SI RECEPTIONNISTE/ASSISTANT(E) DECROCHE]
+
+Bonjour, [prénom] à l'appareil. Je cherche à joindre Julien Bensimon, c'est possible ?
+
+  -> Si on demande "c'est à quel sujet ?" :
+  C'est par rapport à leur site internet, j'ai préparé un truc que je préfère lui
+  montrer directement, ça prend deux minutes.
+
+  -> Si on insiste :
+  En fait j'ai retravaillé quelque chose sur leur site pour leur montrer une idée,
+  je préfère lui expliquer moi-même - vous savez à quel moment il est plus facile
+  à joindre ?
+
+  -> Si on demande de rappeler plus tard :
+  Pas de souci, vous me conseillez un créneau plutôt en fin de matinée ou en fin
+  d'après-midi ?
+
+
+[SI JULIEN DECROCHE DIRECTEMENT]
+
+Bonjour Julien, [prénom] à l'appareil. Je vous appelle un peu à l'improviste,
+je vous prends 2 minutes ?
+
+
+[ACCROCHE]
+
+En fait je bosse sur des outils IA pour les agences immobilières, et avant de
+vous en parler je voulais surtout comprendre comment ça se passe chez vous au
+quotidien - ça vous dérange pas que je vous pose deux-trois questions rapides ?
+
+
+[DECOUVERTE - poser, écouter, ne pas enchaîner sans laisser répondre]
+
+Aujourd'hui, quand un client potentiel appelle en dehors des horaires, ou que
+tout le monde est occupé, ça se passe comment ?
+
+Et niveau relance des contacts - vous arrivez à recontacter tout le monde assez
+vite, ou il y en a qui finissent par passer un peu à la trappe le temps que ça
+se calme ?
+
+Et la partie rédaction d'annonces, prise de rendez-vous pour les visites - c'est
+vous qui gérez ça au quotidien, ou vous avez quelqu'un dédié pour ça ?
+
+
+[ACCROCHE CURIOSITE - rebondir sur ce qu'il vient de dire]
+
+Ah ouais, c'est exactement le genre de truc sur lequel on bosse. En gros, l'idée
+c'est que ce soit géré automatiquement - sans que ça vous prenne du temps en
+plus au quotidien.
+
+
+[LE REVEAL - la page d'accueil retravaillée]
+
+D'ailleurs, c'est un peu pour ça que je me suis permis d'appeler directement -
+je suis tombé sur le site d'IMMOTEC, et j'ai pris l'initiative de retravailler
+votre page d'accueil pour vous montrer concrètement ce que ça donnerait avec ce
+genre d'outils intégrés. Ça vous dit que je vous montre ça, ou que je vous
+l'envoie ?
+
+
+[DEMANDE DE RENDEZ-VOUS]
+
+Le plus simple, ce serait qu'on se cale quinze-vingt minutes, je vous montre
+tout ça en partage d'écran, et vous me dites honnêtement si ça a du sens pour
+vous ou pas. Vous seriez dispo cette semaine ou la semaine prochaine ?
+
+  -> Une fois un créneau proposé :
+  Parfait, ça marche. [Jour] à [heure], ça vous va ? Je vous envoie une
+  confirmation juste après.
+
+
+========================================================
+OBJECTIONS - REPONSES RAPIDES
+========================================================
+
+Occupé :
+Pas de souci, je vous embête pas. Je vous rappelle demain matin, ou vous
+préférez un autre moment ?
+
+Sceptique ("l'IA c'est un effet de mode...") :
+Je comprends complètement, il y a beaucoup de trucs qui sont plus du marketing
+qu'autre chose. C'est justement pour ça que j'ai préféré vous montrer un
+exemple concret plutôt que de vous en parler dans le vide.
+
+"On utilise déjà de l'IA" :
+Ah super, vous l'utilisez pour quoi exactement ?
+
+"Ça m'intéresse pas" :
+Pas de souci du tout, merci d'avoir pris le temps. Si jamais ça change, vous
+avez mon contact. Bonne journée à vous.
+
+"Vous vendez quoi exactement ?" :
+En gros, un outil qui répond aux appels et messages de vos clients quand vous
+êtes pas dispo, qui relance automatiquement les prospects pour qu'aucun ne
+tombe à l'eau, et qui vous fait gagner du temps sur l'administratif - rédaction
+d'annonces, prise de rendez-vous, ce genre de choses.
+
+"Ça coûte combien ?" :
+Ça dépend surtout du volume de votre agence, c'est justement ce qu'on regarde
+ensemble si on se cale quinze minutes - je préfère pas vous balancer un chiffre
+en l'air qui correspondrait pas forcément à votre situation.
+
+"Envoyez-moi un mail" :
+Avec plaisir. Pour que ce soit pas juste un mail dans le vide, je vous envoie
+l'exemple concret qu'on vient d'évoquer - vous me confirmez votre mail ? Et je
+vous rappelle dans quelques jours pour avoir votre retour, ça vous va ?
+
+"Rappelez-moi plus tard" :
+Pas de souci. Ça vous arrange plutôt en fin de journée, ou demain matin ?
+
+
+[SORTIE - si ça n'accroche vraiment pas]
+
+Pas de souci, je comprends. Merci d'avoir pris le temps de m'écouter, bonne
+continuation à vous.
