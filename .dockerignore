@@ -1,0 +1,30 @@
+# Defense-in-depth: the Dockerfile only COPYs specific files by name, never
+# the whole tree, so most of this is redundant today — but if that ever
+# changes to a broader COPY, none of this should ever end up in an image.
+.env
+.env.*
+archive/
+KMS/
+leads/us/call-log.jsonl
+leads/france/call-log.jsonl
+leads/test-lead-fr.json
+leads/test-lead-us.json
+leads/us/*.csv
+leads/us/mash*
+leads/us/process_leads.py
+leads/france/process_leads.py
+
+.venv/
+.venv-win/
+.venv-audit/
+.git/
+__pycache__/
+*.pyc
+*.egg-info/
+
+voice-enhancement/
+scripts/
+setup_*.py
+trust_hub_*.py
+setup-outbound-calling.md
+README.md

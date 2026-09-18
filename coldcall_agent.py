@@ -7,10 +7,13 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+import httpx
 import numpy as np
 from dotenv import load_dotenv
-from livekit import rtc
+from google.protobuf.duration_pb2 import Duration
+from livekit import api, rtc
 from livekit.agents import (
+    AMD,
     Agent,
     AgentSession,
     JobContext,
@@ -58,6 +61,32 @@ KMS_LOGS_PATH = pathlib.Path(
     os.environ.get("KMS_LOGS_PATH", pathlib.Path(__file__).parent / "KMS" / "logs")
 )
 LIVE_LOG_PATH = pathlib.Path(__file__).parent / "KMS" / f"live-{CAMPAIGN}.log"
+
+# no_answer retry policy: after this many no_answer attempts for the same
+# phone, auto-flag the lead not_interested so dialer.py's do-not-call filter
+# permanently excludes it — matches DEFAULT_MAX_NO_ANSWER_ATTEMPTS in
+# dialer.py, kept as its own env-var read here since this module doesn't
+# import dialer.py (they're separate processes).
+MAX_NO_ANSWER_ATTEMPTS = int(os.environ.get("MAX_NO_ANSWER_ATTEMPTS", "3"))
+
+# Optional — call outcomes are pushed to this Airtable table if all three are
+# set (fully optional, campaigns without them just skip the push and keep
+# writing CALL_LOG_PATH as before). See voice-enhancement/README.md history
+# for how the "Cold-Calls" base's tables were set up to match this shape.
+AIRTABLE_API_KEY = os.environ.get("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID = os.environ.get("AIRTABLE_BASE_ID")
+AIRTABLE_TABLE_ID = os.environ.get("AIRTABLE_TABLE_ID")
+
+# LiveKit Cloud auto-records every session's audio (record=True is the
+# session default) but only exposes it through the dashboard — no API to
+# fetch it, confirmed by checking the SDK, protocol files, and the `lk` CLI.
+# Cheapest working option: link straight to the dashboard's per-session
+# player instead of trying to hosting the audio ourselves. Only works while
+# the room is live — room.sid isn't retrievable after the call ends, so
+# this can only ever be captured live, never backfilled for past calls.
+# Same LiveKit project for both campaigns (see .env comments), so this one
+# ID covers both.
+LIVEKIT_PROJECT_ID = os.environ.get("LIVEKIT_PROJECT_ID")
 
 
 def _slugify(s: str) -> str:
@@ -119,7 +148,49 @@ def _to_e164(phone: str, country: str = "FR") -> str:
     return "+" + digits
 
 
-def log_call_outcome(lead: dict, status: str, note: str = "") -> None:
+async def _push_to_airtable(
+    entry: dict, duration_minutes: int | None, lead: dict, session_link: str | None
+) -> None:
+    if not (AIRTABLE_API_KEY and AIRTABLE_BASE_ID and AIRTABLE_TABLE_ID):
+        return  # not configured for this campaign — CALL_LOG_PATH is still the source of truth
+    fields = {
+        "Timestamp": entry["timestamp"],
+        "Lead Name": entry["lead_name"],
+        "Phone": entry["phone"],
+        "Region": entry["region"],
+        "Status": entry["status"],
+        "Note": entry["note"],
+    }
+    if duration_minutes is not None:
+        fields["Call Duration (min)"] = duration_minutes
+    if website := lead.get("Website"):
+        fields["Website"] = website
+    if linkedin := lead.get("LinkedIn URL"):
+        fields["LinkedIn URL"] = linkedin
+    if session_link:
+        fields["Session Recording Link"] = session_link
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_ID}"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {AIRTABLE_API_KEY}"},
+                json={"fields": fields, "typecast": True},
+            )
+            resp.raise_for_status()
+    except Exception as e:
+        # Best-effort only — CALL_LOG_PATH already has this entry, a flaky
+        # Airtable push must never take down a live call.
+        logger.warning(f"Airtable push failed for {entry.get('lead_name')}: {e}")
+
+
+async def log_call_outcome(
+    lead: dict,
+    status: str,
+    note: str = "",
+    duration_minutes: int | None = None,
+    session_link: str | None = None,
+) -> None:
     CALL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -132,11 +203,46 @@ def log_call_outcome(lead: dict, status: str, note: str = "") -> None:
     with open(CALL_LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     logger.info(f"call outcome logged: {entry}")
+    await _push_to_airtable(entry, duration_minutes, lead, session_link)
+
+    if status == "no_answer":
+        await _auto_flag_if_exhausted(lead)
+
+
+async def _auto_flag_if_exhausted(lead: dict) -> None:
+    """If this phone has now hit MAX_NO_ANSWER_ATTEMPTS no_answer entries,
+    log an additional not_interested entry so dialer.py's do-not-call filter
+    permanently excludes it — a lead that never picks up stops being retried
+    forever instead of quietly recurring in every future run."""
+    phone = lead.get("Phone")
+    if not phone or not CALL_LOG_PATH.exists():
+        return
+    count = 0
+    with open(CALL_LOG_PATH, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            e = json.loads(line)
+            if e.get("phone") == phone and e.get("status") == "no_answer":
+                count += 1
+    if count >= MAX_NO_ANSWER_ATTEMPTS:
+        logger.info(
+            f"auto-flagging {lead.get('Name')} not_interested after {count} no-answer attempts"
+        )
+        await log_call_outcome(
+            lead,
+            "not_interested",
+            f"auto-flagged after {count} no-answer attempts with no response",
+        )
 
 
 @dataclass
 class CallContext:
     lead: dict
+    started_at: datetime | None = None
+    outcome_logged: bool = False
+    session_link: str | None = None
 
 
 class ColdCallAgent(Agent):
@@ -167,7 +273,14 @@ class ColdCallAgent(Agent):
                 up for a discovery call, or a requested callback day/time)
         """
         call_ctx: CallContext = context.session.userdata
-        log_call_outcome(call_ctx.lead, status, note or "")
+        duration_minutes = None
+        if call_ctx.started_at:
+            elapsed = datetime.now(timezone.utc) - call_ctx.started_at
+            duration_minutes = round(elapsed.total_seconds() / 60)
+        await log_call_outcome(
+            call_ctx.lead, status, note or "", duration_minutes, call_ctx.session_link
+        )
+        call_ctx.outcome_logged = True
         return "logged"
 
 
@@ -185,19 +298,16 @@ async def entrypoint(ctx: JobContext):
     phone = lead.get("Phone")
     trunk_id = os.environ.get("SIP_OUTBOUND_TRUNK_ID")
 
-    if phone and trunk_id:
+    session_link = None
+    if LIVEKIT_PROJECT_ID:
         try:
-            await ctx.add_sip_participant(
-                call_to=_to_e164(phone, PHONE_COUNTRY),
-                trunk_id=trunk_id,
-                participant_identity="lead",
-                participant_name=lead.get("Name", "lead"),
+            room_sid = await ctx.room.sid
+            session_link = (
+                f"https://cloud.livekit.io/projects/{LIVEKIT_PROJECT_ID}"
+                f"/sessions/{room_sid}/observability?mode=metrics"
             )
         except Exception as e:
-            logger.warning(f"outbound call failed for {lead.get('Name')}: {e}")
-            log_call_outcome(lead, "no_answer", str(e))
-            ctx.shutdown()
-            return
+            logger.warning(f"could not resolve room sid for session link: {e}")
 
     session = AgentSession(
         llm=openai.LLM(model="gpt-4o-mini"),
@@ -226,7 +336,7 @@ async def entrypoint(ctx: JobContext):
             "endpointing": {"min_delay": 0.3, "max_delay": 2.0},
             "preemptive_generation": {"enabled": True},
         },
-        userdata=CallContext(lead=lead),
+        userdata=CallContext(lead=lead, session_link=session_link),
     )
 
     @session.on("conversation_item_added")
@@ -260,8 +370,55 @@ async def entrypoint(ctx: JobContext):
     async def _save_transcript():
         save_transcript(session, lead, ctx.room.name)
 
+    async def _ensure_outcome_logged():
+        # Covers the gap where a call connects, then ends before the LLM
+        # gets to call log_call_outcome — without this, that call leaves
+        # zero trace anywhere, local or Airtable, and looks indistinguishable
+        # from "never called" to a future run's do-not-call check.
+        #
+        # Not every unlogged ending is the same, though — distinguish by
+        # what (if anything) the lead's side actually said:
+        #   - nothing at all -> genuinely no_answer, retriable
+        #   - voicemail/IVR greeting text -> still no_answer, retriable
+        #     (a machine picking up isn't a decline)
+        #   - real speech that isn't voicemail-shaped -> a human was
+        #     reached and the call still ended unresolved; treat a hangup
+        #     after live pickup as an implicit decline (not_interested,
+        #     permanently excluded) rather than retrying them 3 more times
+        call_ctx: CallContext = session.userdata
+        if call_ctx.outcome_logged:
+            return
+
+        user_text = " ".join(
+            "".join(item["content"]) if isinstance(item["content"], list) else str(item["content"])
+            for item in session.history.to_dict().get("items", [])
+            if item.get("type") == "message" and item.get("role") == "user"
+        ).lower()
+
+        voicemail_markers = (
+            "voice mail", "voicemail", "leave a message", "leave your name",
+            "record your message", "rerecord", "press one", "press 1",
+            "not available", "mailbox", "extension", "the tone", "beep",
+            # call-screening / gatekeeper systems (e.g. Google Voice screening)
+            # — also not a real decision-maker, same as voicemail/IVR
+            "reached google", "record your name", "your reason for calling",
+            "hold while i try to connect", "screening",
+        )
+
+        if not user_text.strip():
+            status, note = "no_answer", "call ended before an outcome was logged (early hangup/disconnect)"
+        elif any(marker in user_text for marker in voicemail_markers):
+            status, note = "no_answer", "reached voicemail/IVR, call ended before an outcome was logged"
+        else:
+            status, note = (
+                "not_interested",
+                "picked up (real speech detected), hung up before giving a clear outcome — treated as a decline",
+            )
+        await log_call_outcome(lead, status, note, session_link=call_ctx.session_link)
+
     ctx.add_shutdown_callback(log_usage)
     ctx.add_shutdown_callback(_save_transcript)
+    ctx.add_shutdown_callback(_ensure_outcome_logged)
 
     try:
         await session.start(
@@ -272,9 +429,66 @@ async def entrypoint(ctx: JobContext):
             ),
         )
 
-        # Small pause after pickup before speaking — jumping in instantly felt
-        # abrupt, this gives the person a beat to actually settle into the call.
-        await asyncio.sleep(1.5)
+        if phone and trunk_id:
+            # AMD needs to be listening before the SIP participant joins, so
+            # it has to wrap the dial itself — that's why this now happens
+            # after session.start() instead of before it (AMD listens via
+            # the session's own room_io). ctx.add_sip_participant() (the
+            # convenience wrapper) never sets wait_until_answered, which
+            # defaults to false — so it used to resolve as soon as the SIP
+            # INVITE went out, not once someone actually picked up, with no
+            # cap on ring time. Calling the raw API directly to set that
+            # plus ringing_timeout/max_call_duration explicitly.
+            async with AMD(session) as detector:
+                try:
+                    await ctx.api.sip.create_sip_participant(
+                        api.CreateSIPParticipantRequest(
+                            sip_call_to=_to_e164(phone, PHONE_COUNTRY),
+                            sip_trunk_id=trunk_id,
+                            room_name=ctx.room.name,
+                            participant_identity="lead",
+                            participant_name=lead.get("Name", "lead"),
+                            wait_until_answered=True,
+                            ringing_timeout=Duration(seconds=45),
+                            max_call_duration=Duration(seconds=600),
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"outbound call failed for {lead.get('Name')}: {e}")
+                    await log_call_outcome(lead, "no_answer", str(e), session_link=session_link)
+                    session.userdata.outcome_logged = True
+                    ctx.shutdown()
+                    return
+                amd_result = await detector.execute()
+
+            if amd_result.is_machine:
+                # Hang up now, before the agent ever speaks — no point
+                # running the identity-confirmation script into voicemail
+                # or an IVR menu.
+                logger.info(
+                    f"AMD detected {amd_result.category.value} for {lead.get('Name')}, "
+                    "hanging up before agent interaction"
+                )
+                await log_call_outcome(
+                    lead,
+                    "no_answer",
+                    f"AMD detected {amd_result.category.value} — hung up before agent interaction",
+                    session_link=session_link,
+                )
+                session.userdata.outcome_logged = True
+                ctx.shutdown()
+                return
+
+        session.userdata.started_at = datetime.now(timezone.utc)
+
+        # No manual pause here anymore — this used to sleep(1.5) to give the
+        # person a beat before jumping in, but AMD (above) already listens to
+        # and classifies the greeting first, which serves the same purpose.
+        # Stacking a fixed 1.5s on top of AMD's own listening window plus the
+        # LLM/TTS pipeline was measurably too much dead air: two real Alabama
+        # calls ended with zero agent speech — the caller said "Hello?" and
+        # hung up before a reply ever came. Removed rather than reduced,
+        # since AMD's timing already adapts to the actual greeting length.
 
         opening_instructions = {
             "fr": (
@@ -299,7 +513,10 @@ async def entrypoint(ctx: JobContext):
         # before the agent got to speak. This is the actual point where that
         # surfaces, so it's caught here rather than crashing the job unlogged.
         logger.warning(f"session ended before speaking for {lead.get('Name')}: {e}")
-        log_call_outcome(lead, "no_answer", f"session ended before speaking: {e}")
+        await log_call_outcome(
+            lead, "no_answer", f"session ended before speaking: {e}", session_link=session_link
+        )
+        session.userdata.outcome_logged = True  # don't also let _ensure_outcome_logged double-log this
 
 
 if __name__ == "__main__":

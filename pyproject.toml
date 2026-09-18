@@ -14,6 +14,7 @@ dependencies = [
     "python-dotenv",
     "tzdata; sys_platform == 'win32'",
     "twilio",
+    "httpx",
 ]
 
 [tool.setuptools]
